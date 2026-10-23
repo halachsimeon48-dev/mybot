@@ -3,8 +3,8 @@ import csv
 import io
 import logging
 import os
-import sqlite3
 from datetime import datetime, timedelta
+import asyncpg
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
@@ -22,29 +22,35 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 MANAGER_URL = os.getenv("MANAGER_URL", "https://t.me/kindbulat")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not BOT_TOKEN: raise SystemExit("BOT_TOKEN не задан в .env")
-if not ADMIN_IDS: raise SystemExit("ADMIN_IDS не задан в .env")
+if not BOT_TOKEN: raise SystemExit("BOT_TOKEN не задан")
+if not ADMIN_IDS: raise SystemExit("ADMIN_IDS не задан")
+if not DATABASE_URL: raise SystemExit("DATABASE_URL не задан")
 
 logging.basicConfig(level=logging.INFO)
 
-conn = sqlite3.connect("users.db")
-conn.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    age TEXT,
-    rko_knowledge TEXT,
-    desired_income TEXT,
-    location TEXT,
-    call_ready TEXT,
-    joined_at TEXT,
-    last_reminded TEXT,
-    subscribed INTEGER DEFAULT 1,
-    blocked INTEGER DEFAULT 0
-)
-""")
-conn.commit()
+db_pool = None
+
+async def init_db():
+    global db_pool
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT,
+            age TEXT,
+            rko_knowledge TEXT,
+            desired_income TEXT,
+            location TEXT,
+            call_ready TEXT,
+            joined_at TEXT,
+            last_reminded TEXT,
+            subscribed INT DEFAULT 1,
+            blocked INT DEFAULT 0
+        )
+        """)
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -64,7 +70,9 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
-    row = conn.execute("SELECT user_id FROM users WHERE user_id=?", (msg.from_user.id,)).fetchone()
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT user_id FROM users WHERE user_id=$1", msg.from_user.id)
+    
     if row:
         await msg.answer("Ты уже проходил опрос. Если хочешь пообщаться с менеджером, пиши ему: " + MANAGER_URL)
         return
@@ -98,12 +106,12 @@ async def quiz_location(msg: Message, state: FSMContext):
 @dp.message(Quiz.call_ready)
 async def quiz_call(msg: Message, state: FSMContext):
     data = await state.get_data()
-    conn.execute(
-        "INSERT OR REPLACE INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES (?,?,?,?,?,?,?,?)",
-        (msg.from_user.id, msg.from_user.username, data.get("age"), data.get("rko"), 
-         data.get("income"), data.get("location"), msg.text.strip()[:50], datetime.now().isoformat())
-    )
-    conn.commit()
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            msg.from_user.id, msg.from_user.username, data.get("age"), data.get("rko"), 
+            data.get("income"), data.get("location"), msg.text.strip()[:50], datetime.now().isoformat()
+        )
     await state.clear()
 
     text = (
@@ -113,36 +121,33 @@ async def quiz_call(msg: Message, state: FSMContext):
         f"{MANAGER_URL}\n\n"
         "Заявки обрабатываю сразу."
     )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]
-    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
 
     pdf_path = "guide.pdf"
     if os.path.exists(pdf_path):
         file = FSInputFile(pdf_path, filename="guide.pdf")
         await msg.answer_document(file, caption=text, reply_markup=kb)
     else:
-        await msg.answer(f"⚠️ (Файл guide.pdf не найден в папке).\n\n{text}", reply_markup=kb, disable_web_page_preview=True)
+        await msg.answer(f"⚠️ (Файл guide.pdf не найден).\n\n{text}", reply_markup=kb, disable_web_page_preview=True)
 
 async def reminder_loop():
     while True:
         try:
             now = datetime.now()
-            rows = conn.execute("SELECT user_id, last_reminded FROM users WHERE subscribed=1 AND blocked=0").fetchall()
-            for user_id, last in rows:
-                if last is None or (now - datetime.fromisoformat(last)) >= timedelta(days=2):
-                    kb = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]
-                    ])
-                    try:
-                        await bot.send_message(user_id, "👋 Напоминаю: ты проходил опрос по РКО. Хочешь узнать подробнее? Жми кнопку!", reply_markup=kb)
-                        conn.execute("UPDATE users SET last_reminded=? WHERE user_id=?", (now.isoformat(), user_id))
-                    except Exception:
-                        conn.execute("UPDATE users SET blocked=1 WHERE user_id=?", (user_id,))
-            conn.commit()
-        except Exception:
-            pass
+            async with db_pool.acquire() as conn:
+                rows = await conn.fetch("SELECT user_id, last_reminded FROM users WHERE subscribed=1 AND blocked=0")
+                for row in rows:
+                    user_id = row['user_id']
+                    last = row['last_reminded']
+                    if last is None or (now - datetime.fromisoformat(last)) >= timedelta(days=2):
+                        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
+                        try:
+                            await bot.send_message(user_id, "👋 Напоминаю: ты проходил опрос по РКО. Хочешь узнать подробнее? Жми кнопку!", reply_markup=kb)
+                            await conn.execute("UPDATE users SET last_reminded=$1 WHERE user_id=$2", now.isoformat(), user_id)
+                        except Exception:
+                            await conn.execute("UPDATE users SET blocked=1 WHERE user_id=$1", user_id)
+        except Exception as e:
+            logging.error(f"Ошибка в напоминаниях: {e}")
         await asyncio.sleep(3600)
 
 def admin_menu():
@@ -161,8 +166,9 @@ async def admin_cmd(msg: Message):
 @dp.callback_query(F.data == "a_stats")
 async def a_stats(cb: CallbackQuery):
     if not is_admin(cb.from_user.id): return await cb.answer("Нет доступа", show_alert=True)
-    total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    ready = conn.execute("SELECT COUNT(*) FROM users WHERE call_ready LIKE '%да%' OR call_ready LIKE '%Да%'").fetchone()[0]
+    async with db_pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM users")
+        ready = await conn.fetchval("SELECT COUNT(*) FROM users WHERE call_ready LIKE '%да%' OR call_ready LIKE '%Да%'")
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="a_back")]])
     await cb.message.answer(f"📊 Всего анкет: {total}\n🔥 Готовы к созвону: {ready}", reply_markup=kb)
     await cb.answer()
@@ -175,13 +181,14 @@ async def a_back(cb: CallbackQuery):
 async def a_users(cb: CallbackQuery):
     if not is_admin(cb.from_user.id): return await cb.answer("Нет доступа", show_alert=True)
     page = int(cb.data.split(":")[1])
-    rows = conn.execute("SELECT user_id, age, rko_knowledge, desired_income, location, call_ready FROM users ORDER BY joined_at DESC LIMIT 5 OFFSET ?", (page*5,)).fetchall()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id, age, rko_knowledge, desired_income, location, call_ready FROM users ORDER BY joined_at DESC LIMIT 5 OFFSET $1", page*5)
     
     if not rows: return await cb.answer("Пусто", show_alert=True)
     
     text = f"👥 Анкеты (стр. {page+1})\n\n"
     for r in rows:
-        text += f"ID: {r[0]} | {r[1]} лет | {r[4]}\nДоход: {r[3]} | РКО: {r[2]}/10\nСозвон: {r[5]}\n\n"
+        text += f"ID: {r['user_id']} | {r['age']} лет | {r['location']}\nДоход: {r['desired_income']} | РКО: {r['rko_knowledge']}/10\nСозвон: {r['call_ready']}\n\n"
     
     nav = []
     if page > 0: nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"a_users:{page-1}"))
@@ -208,26 +215,35 @@ async def a_broadcast_send(msg: Message, state: FSMContext):
     
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
-    rows = conn.execute("SELECT user_id FROM users WHERE subscribed=1 AND blocked=0").fetchall()
+    
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users WHERE subscribed=1 AND blocked=0")
+        
     sent, failed = 0, 0
-    for (uid,) in rows:
+    for row in rows:
+        uid = row['user_id']
         try:
             await bot.send_message(uid, msg.text, reply_markup=kb)
             sent += 1
         except Exception:
             failed += 1
-            conn.execute("UPDATE users SET blocked=1 WHERE user_id=?", (uid,))
+            async with db_pool.acquire() as conn:
+                await conn.execute("UPDATE users SET blocked=1 WHERE user_id=$1", uid)
         await asyncio.sleep(0.05)
     await msg.answer(f"✅ Отправлено: {sent}\n❌ Ошибок: {failed}", reply_markup=admin_menu())
 
 @dp.callback_query(F.data == "a_export")
 async def a_export(cb: CallbackQuery):
     if not is_admin(cb.from_user.id): return await cb.answer("Нет доступа", show_alert=True)
-    rows = conn.execute("SELECT * FROM users").fetchall()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM users")
+    
     output = io.StringIO()
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(["user_id", "username", "age", "rko_knowledge", "desired_income", "location", "call_ready", "joined_at"])
-    writer.writerows(rows)
+    for r in rows:
+        writer.writerow([r['user_id'], r['username'], r['age'], r['rko_knowledge'], r['desired_income'], r['location'], r['call_ready'], r['joined_at']])
+    
     file = BufferedInputFile(output.getvalue().encode("utf-8"), filename="leads.csv")
     await cb.message.answer_document(file, caption=f"Выгрузка: {len(rows)} анкет")
     await cb.answer()
@@ -245,6 +261,7 @@ async def start_web_server():
     logging.info("Веб-сервер запущен на порту")
 
 async def main():
+    await init_db()
     asyncio.create_task(reminder_loop())
     await start_web_server()
     logging.info("Бот запущен")
