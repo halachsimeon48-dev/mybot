@@ -106,12 +106,14 @@ async def quiz_location(msg: Message, state: FSMContext):
 @dp.message(Quiz.call_ready)
 async def quiz_call(msg: Message, state: FSMContext):
     data = await state.get_data()
+    logging.info(f"Попытка записи в БД: {msg.from_user.id}")
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
             msg.from_user.id, msg.from_user.username, data.get("age"), data.get("rko"), 
             data.get("income"), data.get("location"), msg.text.strip()[:50], datetime.now().isoformat()
         )
+    logging.info(f"Запись в БД успешна: {msg.from_user.id}")
     await state.clear()
 
     text = (
