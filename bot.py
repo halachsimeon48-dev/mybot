@@ -23,7 +23,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 MANAGER_URL = os.getenv("MANAGER_URL", "https://t.me/kindbulat")
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = "@semuabuz" # Твой канал
+CHANNEL_ID = "@semuabuz"
 
 if not BOT_TOKEN: raise SystemExit("BOT_TOKEN не задан")
 if not ADMIN_IDS: raise SystemExit("ADMIN_IDS не задан")
@@ -118,7 +118,6 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(call=cb.data)
     
-    # Сохраняем в БД
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -126,7 +125,6 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
             data.get("income"), data.get("location"), cb.data, datetime.now().isoformat()
         )
 
-    # Отправляем уведомление админу
     call_status = "Да" if cb.data == "call_yes" else "Нет"
     admin_text = (
         f"🔥 **Новая анкета!**\n\n"
@@ -144,7 +142,6 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
         except Exception as e:
             logging.warning(f"Ошибка отправки админу: {e}")
 
-    # ПРОВЕРКА ПОДПИСКИ В САМОМ КОНЦЕ
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']:
@@ -162,22 +159,18 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Если подписан, выдаем PDF
     await send_pdf(cb.message, data)
     await cb.answer()
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']:
             raise Exception("Not subscribed")
         
-        # Если подписался, отправляем PDF
-        await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
-        await send_pdf(cb.message, data)
-        await state.clear()
+        # Если подписался, меняем сообщение
+        await cb.message.edit_text("✅ Отлично! Подписка подтверждена.\n\nТеперь напиши /start, чтобы получить свой гайд.")
     except Exception:
         await cb.answer("❌ Ты всё еще не подписан на канал!", show_alert=True)
     await cb.answer()
@@ -198,7 +191,6 @@ async def send_pdf(message: Message, data: dict):
     else:
         await message.answer(f"⚠️ (Файл guide.pdf не найден).\n\n{text}", reply_markup=kb, disable_web_page_preview=True)
 
-    # Дожим через 24 часа
     await asyncio.sleep(86400) 
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT blocked, followup_sent FROM users WHERE user_id=$1", message.from_user.id)
