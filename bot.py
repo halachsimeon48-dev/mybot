@@ -5,6 +5,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -231,8 +232,21 @@ async def a_export(cb: CallbackQuery):
     await cb.message.answer_document(file, caption=f"Выгрузка: {len(rows)} анкет")
     await cb.answer()
 
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.getenv("PORT", 8080)))
+    await site.start()
+    logging.info("Веб-сервер запущен на порту")
+
 async def main():
     asyncio.create_task(reminder_loop())
+    await start_web_server()
     logging.info("Бот запущен")
     await dp.start_polling(bot)
 
