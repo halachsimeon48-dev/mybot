@@ -1,4 +1,3 @@
-cat > bot.py << 'PYEOF'
 import asyncio
 import csv
 import io
@@ -108,7 +107,6 @@ async def quiz_location(msg: Message, state: FSMContext):
 async def quiz_call(msg: Message, state: FSMContext):
     data = await state.get_data()
     
-    # Сохраняем в БД
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -117,9 +115,8 @@ async def quiz_call(msg: Message, state: FSMContext):
         )
     await state.clear()
 
-    # 🔥 1. УВЕДОМЛЕНИЕ ТЕБЕ В ЛС
     admin_text = (
-        f"🔥 **Новая анкета!**\n\n"
+        f"🔥 Новая анкета!\n\n"
         f"👤 @{msg.from_user.username or 'без_юзернейма'}\n"
         f"🆔 ID: {msg.from_user.id}\n"
         f"🎂 Возраст: {data.get('age')}\n"
@@ -134,7 +131,6 @@ async def quiz_call(msg: Message, state: FSMContext):
         except Exception as e:
             logging.warning(f"Не удалось отправить уведомление админу {admin_id}: {e}")
 
-    # Текст для клиента
     text = (
         "Спасибо за ответы. Твой гайд по первым 100к уже готов. Забирай 👇\n\n"
         "Хочешь получить деньги за простые действия в РКО?\n\n"
@@ -145,7 +141,6 @@ async def quiz_call(msg: Message, state: FSMContext):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
     
-    # Отправляем PDF
     pdf_path = "guide.pdf"
     if os.path.exists(pdf_path):
         file = FSInputFile(pdf_path, filename="guide.pdf")
@@ -153,9 +148,7 @@ async def quiz_call(msg: Message, state: FSMContext):
     else:
         await msg.answer(f"⚠️ (Файл guide.pdf не найден).\n\n{text}", reply_markup=kb, disable_web_page_preview=True)
 
-    # 🤖 2. ДОГРЕВ (через 15 минут)
-    await asyncio.sleep(900)  # 15 минут
-    # Проверяем, не заблокировал ли он бота
+    await asyncio.sleep(900)
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT blocked FROM users WHERE user_id=$1", msg.from_user.id)
         if user and user['blocked'] == 0:
@@ -212,7 +205,7 @@ async def a_stats(cb: CallbackQuery):
         total = await conn.fetchval("SELECT COUNT(*) FROM users")
         ready = await conn.fetchval("SELECT COUNT(*) FROM users WHERE call_ready LIKE '%да%' OR call_ready LIKE '%Да%'")
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="a_back")]])
-    await cb.message.answer(f"📊 **Всего анкет:** {total}\n🔥 **Готовы к созвону:** {ready}", reply_markup=kb)
+    await cb.message.answer(f"📊 Всего анкет: {total}\n🔥 Готовы к созвону: {ready}", reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "a_back")
@@ -228,7 +221,7 @@ async def a_users(cb: CallbackQuery):
     
     if not rows: return await cb.answer("Пусто", show_alert=True)
     
-    text = f"👥 **Анкеты (стр. {page+1})**\n\n"
+    text = f"👥 Анкеты (стр. {page+1})\n\n"
     for r in rows:
         text += f"ID: {r['user_id']} | {r['age']} лет | {r['location']}\nДоход: {r['desired_income']} | РКО: {r['rko_knowledge']}/10\nСозвон: {r['call_ready']}\n\n"
     
@@ -238,8 +231,8 @@ async def a_users(cb: CallbackQuery):
     nav.append(InlineKeyboardButton(text="➡️", callback_data=f"a_users:{page+1}"))
     
     kb = InlineKeyboardMarkup(inline_keyboard=[nav])
-    try: await cb.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    except: await cb.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    try: await cb.message.edit_text(text, reply_markup=kb)
+    except: await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "a_broadcast")
@@ -311,4 +304,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-PYEOF
