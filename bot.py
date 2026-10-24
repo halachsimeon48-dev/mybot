@@ -79,11 +79,36 @@ def get_kb(options):
 @dp.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT user_id FROM users WHERE user_id=$1", msg.from_user.id)
+        row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", msg.from_user.id)
     
     if row:
-        await msg.answer("Ты уже проходил опрос. Если хочешь пообщаться с менеджером, пиши ему: " + MANAGER_URL)
-        return
+        # Если человек в базе, но PDF еще не получил (followup_sent=0)
+        if row['followup_sent'] == 0:
+            data = {
+                "age": row['age'], "rko": row['rko_knowledge'], 
+                "income": row['desired_income'], "location": row['location']
+            }
+            # Проверяем подписку
+            try:
+                member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=msg.from_user.id)
+                if member.status in ['left', 'kicked']:
+                    raise Exception("Not subscribed")
+                # Если подписан — даем PDF
+                await send_pdf(msg, data)
+                async with db_pool.acquire() as conn:
+                    await conn.execute("UPDATE users SET followup_sent=1 WHERE user_id=$1", msg.from_user.id)
+                return
+            except Exception:
+                # Если не подписан — просим подписаться
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
+                    [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
+                ])
+                await msg.answer("Чтобы забрать гайд, подпишись на наш канал 👇", reply_markup=kb)
+                return
+        else:
+            await msg.answer("Ты уже проходил опрос. Если хочешь пообщаться с менеджером, пиши ему: " + MANAGER_URL)
+            return
 
     await msg.answer("1/5. Сколько тебе лет?")
     await state.set_state(Quiz.age)
@@ -164,13 +189,31 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    if not data or "age" not in data:
+        # Если данных нет (например, состояние сброшено), берем из базы
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", cb.from_user.id)
+            if row:
+                data = {
+                    "age": row['age'], "rko": row['rko_knowledge'], 
+                    "income": row['desired_income'], "location": row['location']
+                }
+            else:
+                await cb.answer("❌ Ошибка: данные анкеты не найдены. Напиши /start", show_alert=True)
+                return
+
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']:
             raise Exception("Not subscribed")
         
-        # Если подписался, меняем сообщение
-        await cb.message.edit_text("✅ Отлично! Подписка подтверждена.\n\nТеперь напиши /start, чтобы получить свой гайд.")
+        # Если подписан — даем PDF
+        await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
+        await send_pdf(cb.message, data)
+        async with db_pool.acquire() as conn:
+            await conn.execute("UPDATE users SET followup_sent=1 WHERE user_id=$1", cb.from_user.id)
+        await state.clear()
     except Exception:
         await cb.answer("❌ Ты всё еще не подписан на канал!", show_alert=True)
     await cb.answer()
