@@ -34,7 +34,8 @@ async def init_db():
             income TEXT,
             location TEXT,
             call_status TEXT,
-            joined_at TEXT
+            joined_at TEXT,
+            pdf_sent INT DEFAULT 0
         )
         """)
 
@@ -52,9 +53,28 @@ dp = Dispatcher()
 async def start(msg: Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", msg.from_user.id)
+    
     if row:
-        await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
-        return
+        if row['pdf_sent'] == 0:
+            # Если человек есть в базе, но PDF не получил — отправляем проверку
+            try:
+                member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=msg.from_user.id)
+                if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
+                await send_pdf(msg)
+                async with db_pool.acquire() as conn:
+                    await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", msg.from_user.id)
+                return
+            except Exception:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
+                    [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
+                ])
+                await msg.answer("Ты уже заполнил анкету, но не забрал PDF. Подпишись на канал 👇", reply_markup=kb)
+                return
+        else:
+            await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
+            return
+
     await msg.answer("1/5. Сколько тебе лет?")
     await state.set_state(Quiz.age)
 
@@ -111,6 +131,8 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         return
 
     await send_pdf(cb.message)
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
     await cb.answer()
 
 @dp.callback_query(F.data == "check_sub")
@@ -118,8 +140,12 @@ async def check_sub(cb: CallbackQuery):
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
+        
+        # Если подписан — выдаем PDF
         await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
         await send_pdf(cb.message)
+        async with db_pool.acquire() as conn:
+            await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
     except Exception:
         await cb.answer("❌ Ты всё еще не подписан на канал!", show_alert=True)
     await cb.answer()
@@ -127,6 +153,7 @@ async def check_sub(cb: CallbackQuery):
 async def send_pdf(message: Message):
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
+    
     if os.path.exists("guide.pdf"):
         await message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
     else:
