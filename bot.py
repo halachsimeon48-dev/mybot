@@ -48,7 +48,6 @@ async def init_db():
             call_ready TEXT,
             joined_at TEXT,
             last_reminded TEXT,
-            pdf_sent INT DEFAULT 0,
             blocked INT DEFAULT 0
         )
         """)
@@ -78,25 +77,8 @@ async def start(msg: Message, state: FSMContext):
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", msg.from_user.id)
     
     if row:
-        if row['pdf_sent'] == 0:
-            try:
-                member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=msg.from_user.id)
-                if member.status in ['left', 'kicked']:
-                    raise Exception("Not subscribed")
-                await send_pdf(msg, row)
-                async with db_pool.acquire() as conn:
-                    await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", msg.from_user.id)
-                return
-            except Exception:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
-                    [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
-                ])
-                await msg.answer("Чтобы забрать гайд, подпишись на канал 👇", reply_markup=kb)
-                return
-        else:
-            await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
-            return
+        await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
+        return
 
     await msg.answer("1/5. Сколько тебе лет?")
     await state.set_state(Quiz.age)
@@ -128,14 +110,14 @@ async def quiz_location(msg: Message, state: FSMContext):
 @dp.callback_query(Quiz.call_ready)
 async def quiz_call(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    await state.update_data(call=cb.data)
     
     async with db_pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at, pdf_sent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0)",
+            "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
             cb.from_user.id, cb.from_user.username, data.get("age"), data.get("rko"), 
             data.get("income"), data.get("location"), cb.data, datetime.now().isoformat()
         )
+    await state.clear()
 
     call_status = "Да" if cb.data == "call_yes" else "Нет"
     admin_text = f"🔥 **Новая анкета!**\n\n👤 @{cb.from_user.username or 'нет'}\n🆔 ID: {cb.from_user.id}\n🎂 Возраст: {data.get('age')}\n📊 РКО: {data.get('rko')}/10\n💰 Доход: {data.get('income')}\n📍 Город: {data.get('location')}\n📞 Созвон: {call_status}"
@@ -146,34 +128,35 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
 
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
-        if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
+        if member.status in ['left', 'kicked']:
+            raise Exception("Not subscribed")
     except Exception:
+        channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
-            [InlineKeyboardButton(text="✅ Я подписался", callback_data="check_sub")]
+            [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
+            [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
         ])
-        await cb.message.edit_text("Твой гайд готов! Но чтобы забрать его, подпишись 👇", reply_markup=kb)
+        await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд готов. Но чтобы забрать его, подпишись на наш канал 👇", reply_markup=kb)
         return
 
     await send_pdf(cb.message, data)
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
     await cb.answer()
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(cb: CallbackQuery):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", cb.from_user.id)
+    if not row:
+        await cb.answer("Ошибка. Напиши /start", show_alert=True)
+        return
+
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
-        if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
+        if member.status in ['left', 'kicked']:
+            raise Exception("Not subscribed")
         
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", cb.from_user.id)
-            if row:
-                await send_pdf(cb.message, row)
-                await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
-                await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
-            else:
-                await cb.answer("Ошибка. Напиши /start", show_alert=True)
+        await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
+        await send_pdf(cb.message, row)
     except Exception:
         await cb.answer("❌ Ты всё еще не подписан на канал!", show_alert=True)
     await cb.answer()
@@ -181,12 +164,18 @@ async def check_sub(cb: CallbackQuery):
 async def send_pdf(message: Message, data: dict):
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до **15 000 ₽** за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
-    
     if os.path.exists("guide.pdf"):
-        file = FSInputFile("guide.pdf", filename="guide.pdf")
-        await message.answer_document(file, caption=text, reply_markup=kb)
+        await message.answer_document(FSInputFile("guide.pdf", filename="guide.pdf"), caption=text, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
+
+    await asyncio.sleep(86400)
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT blocked FROM users WHERE user_id=$1", message.from_user.id)
+        if user and user['blocked'] == 0:
+            try:
+                await bot.send_message(message.from_user.id, f"👋 {message.from_user.first_name}, ты так и не забрал оффер.\nМеста ограничены. Если не готов — передам заявку другому.\nЕсли готов — пиши 👇", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Забрать оффер", url=MANAGER_URL)]]))
+            except: pass
 
 async def reminder_loop():
     while True:
@@ -205,11 +194,7 @@ async def reminder_loop():
         await asyncio.sleep(3600)
 
 def admin_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👥 Анкеты", callback_data="a_users:0")],
-        [InlineKeyboardButton(text="📊 Статистика", callback_data="a_stats")],
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="a_broadcast")],
-    ])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👥 Анкеты", callback_data="a_users:0")],[InlineKeyboardButton(text="📊 Статистика", callback_data="a_stats")],[InlineKeyboardButton(text="📢 Рассылка", callback_data="a_broadcast")]])
 
 @dp.message(Command("admin"))
 async def admin_cmd(msg: Message):
