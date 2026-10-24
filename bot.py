@@ -16,7 +16,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 MANAGER_URL = os.getenv("MANAGER_URL", "https://t.me/kindbulat")
 DATABASE_URL = os.getenv("DATABASE_URL")
-CHANNEL_ID = "@semuabuz"
 
 logging.basicConfig(level=logging.INFO)
 db_pool = None
@@ -105,31 +104,18 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
-        [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="give_pdf")]
-    ])
-    # Отправляем НОВОЕ сообщение, а не редактируем старое
-    await cb.message.answer("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nПодпишись на наш канал и забери файл 👇", reply_markup=kb)
+    # СРАЗУ ВЫДАЕМ PDF БЕЗ ПРОВЕРКИ ПОДПИСКИ
+    await send_pdf(cb.message)
     await cb.answer()
 
-@dp.callback_query(F.data == "give_pdf")
-async def give_pdf(cb: CallbackQuery):
-    # Удаляем сообщение с кнопками
-    try:
-        await cb.message.delete()
-    except:
-        pass
-
+async def send_pdf(message: Message):
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
     
     if os.path.exists("guide.pdf"):
-        await cb.message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
+        await message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
     else:
-        await cb.message.answer(text, reply_markup=kb)
-    await cb.answer()
+        await message.answer(text, reply_markup=kb)
 
 async def handle(request): return web.Response(text="OK")
 
