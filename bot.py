@@ -110,12 +110,18 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
         [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="give_pdf")]
     ])
+    # Отправляем НОВОЕ сообщение, а не редактируем старое
     await cb.message.answer("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nПодпишись на наш канал и забери файл 👇", reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "give_pdf")
 async def give_pdf(cb: CallbackQuery):
-    await cb.message.edit_text("✅ Отлично! Забирай:")
+    # Удаляем сообщение с кнопками
+    try:
+        await cb.message.delete()
+    except:
+        pass
+
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
     
