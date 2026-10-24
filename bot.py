@@ -105,7 +105,6 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    # СРАЗУ ВЫДАЕМ PDF И ДАЕМ КНОПКИ НА КАНАЛ И МЕНЕДЖЕРА
     text = (
         "✅ Ты прошел отбор!\n\n"
         "Вот твой гайд по первым 100к. Забирай 👇\n\n"
