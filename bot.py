@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import asyncpg
 from aiohttp import web
 
@@ -30,6 +30,7 @@ async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL)
     async with db_pool.acquire() as conn:
+        # Бот сам создаст таблицу, если её нет!
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -95,34 +96,28 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(call=cb.data)
 
-    # Сохраняем в базу
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
             cb.from_user.id, cb.from_user.username, data.get("age"), data.get("rko"), data.get("income"), data.get("location"), cb.data, datetime.now().isoformat()
         )
 
-    # Уведомление админу
     admin_text = f"🔥 **Новая анкета!**\n\n👤 @{cb.from_user.username or 'нет'}\n🆔 ID: {cb.from_user.id}\n🎂 Возраст: {data.get('age')}\n📊 РКО: {data.get('rko')}/10\n💰 Доход: {data.get('income')}\n📍 Город: {data.get('location')}\n📞 Созвон: {cb.data}"
     for admin_id in ADMIN_IDS:
         try: await bot.send_message(admin_id, admin_text, parse_mode="Markdown")
         except: pass
 
-    # ПРОВЕРКА ПОДПИСКИ (СРАЗУ)
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
-        if member.status in ['left', 'kicked']:
-            raise Exception("Not subscribed")
+        if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
     except Exception:
-        channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
+            [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
             [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check")]
         ])
         await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд готов. Но чтобы забрать его, подпишись на наш канал 👇", reply_markup=kb)
         return
 
-    # Если уже подписан
     await send_pdf(cb.message, data)
     await cb.answer()
 
@@ -131,9 +126,7 @@ async def check_sub(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
-        if member.status in ['left', 'kicked']:
-            raise Exception("Not subscribed")
-        
+        if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
         await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
         await send_pdf(cb.message, data)
         await state.clear()
