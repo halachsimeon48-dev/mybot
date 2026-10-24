@@ -105,7 +105,6 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    # ИСПРАВЛЕНО: Вместо edit_text используем answer (чтобы избежать ошибки "message is not modified")
     channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
