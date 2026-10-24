@@ -79,6 +79,13 @@ def get_kb(options):
     for text, callback in options:
         buttons.append([InlineKeyboardButton(text=text, callback_data=callback)])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+@dp.message(Command("check"))
+async def check_channel(msg: Message):
+    try:
+        chat = await bot.get_chat(CHANNEL_ID)
+        await msg.answer(f"✅ Бот видит канал: {chat.title} (@{chat.username})")
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
 
 @dp.message(Command("start"))
 async def start(msg: Message, state: FSMContext):
