@@ -34,8 +34,7 @@ async def init_db():
             income TEXT,
             location TEXT,
             call_status TEXT,
-            joined_at TEXT,
-            pdf_sent INT DEFAULT 0
+            joined_at TEXT
         )
         """)
 
@@ -55,51 +54,38 @@ async def start(msg: Message, state: FSMContext):
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", msg.from_user.id)
     
     if row:
-        if row['pdf_sent'] == 0:
-            # Если человек есть в базе, но PDF не получил — отправляем проверку
-            try:
-                member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=msg.from_user.id)
-                if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
-                await send_pdf(msg)
-                async with db_pool.acquire() as conn:
-                    await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", msg.from_user.id)
-                return
-            except Exception:
-                kb = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
-                    [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
-                ])
-                await msg.answer("Ты уже заполнил анкету, но не забрал PDF. Подпишись на канал 👇", reply_markup=kb)
-                return
-        else:
-            await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
-            return
+        await msg.answer("Ты уже проходил опрос. Пиши менеджеру: " + MANAGER_URL)
+        return
 
-    await msg.answer("1/5. Сколько тебе лет?")
+    await msg.answer("Привет! 👋 Рад видеть тебя в команде.\nДавай познакомимся, чтобы я мог подобрать для тебя лучшие офферы.\n\n1/5. Для начала, сколько тебе лет?\n(Это поможет мне подобрать варианты, которые лучше всего подойдут под твой возраст)")
     await state.set_state(Quiz.age)
 
 @dp.message(Quiz.age)
 async def q_age(msg: Message, state: FSMContext):
     await state.update_data(age=msg.text)
-    await msg.answer("2/5. Насколько ты знаешь РКО? (0-10)")
+    await msg.answer("2/5. Оцени свой уровень в РКО от 0 до 10.\n(0 — слышу впервые, 10 — работал с банками и знаю все тонкости)\n\nНапиши просто цифру (например: 3)")
     await state.set_state(Quiz.rko)
 
 @dp.message(Quiz.rko)
 async def q_rko(msg: Message, state: FSMContext):
     await state.update_data(rko=msg.text)
-    await msg.answer("3/5. Какой доход хочешь?")
+    await msg.answer("3/5. Какую сумму ты хочешь зарабатывать в месяц?\nНапиши конкретно (например: 50к, 100к, 300к). Это нужно, чтобы понять твои цели.")
     await state.set_state(Quiz.income)
 
 @dp.message(Quiz.income)
 async def q_income(msg: Message, state: FSMContext):
     await state.update_data(income=msg.text)
-    await msg.answer("4/5. Город?")
+    await msg.answer("4/5. Из какого ты города?\n(Это нужно, чтобы подобрать банки, которые лучше всего работают в твоем регионе)")
     await state.set_state(Quiz.location)
 
 @dp.message(Quiz.location)
 async def q_loc(msg: Message, state: FSMContext):
     await state.update_data(location=msg.text)
-    await msg.answer("5/5. Готов на созвон?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Да", callback_data="Да"), InlineKeyboardButton(text="Нет", callback_data="Нет")]]))
+    await msg.answer("5/5. Готов ли ты выйти на короткий созвон (10-15 минут)?\nНа нем мы обсудим, как тебе выйти на первые 100к. Без воды, только конкретика.", 
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                         [InlineKeyboardButton(text="✅ Да, готов", callback_data="call_yes")],
+                         [InlineKeyboardButton(text="❌ Нет, не готов", callback_data="call_no")]
+                     ]))
     await state.set_state(Quiz.call_status)
 
 @dp.callback_query(Quiz.call_status)
@@ -113,7 +99,8 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
             cb.from_user.id, cb.from_user.username, data.get("age"), data.get("rko"), data.get("income"), data.get("location"), cb.data, datetime.now().isoformat()
         )
 
-    admin_text = f"🔥 Новая анкета!\n\n👤 @{cb.from_user.username or 'нет'}\n🆔 ID: {cb.from_user.id}\n🎂 Возраст: {data.get('age')}\n📊 РКО: {data.get('rko')}/10\n💰 Доход: {data.get('income')}\n📍 Город: {data.get('location')}\n📞 Созвон: {cb.data}"
+    call_text = "Да" if cb.data == "call_yes" else "Нет"
+    admin_text = f"🔥 Новая анкета!\n\n👤 @{cb.from_user.username or 'нет'}\n🆔 ID: {cb.from_user.id}\n🎂 Возраст: {data.get('age')}\n📊 РКО: {data.get('rko')}/10\n💰 Доход: {data.get('income')}\n📍 Город: {data.get('location')}\n📞 Созвон: {call_text}"
     for admin_id in ADMIN_IDS:
         try: await bot.send_message(admin_id, admin_text)
         except: pass
@@ -127,12 +114,10 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
             [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
             [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
         ])
-        await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд готов. Но чтобы забрать его, подпишись на наш канал 👇", reply_markup=kb)
+        await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nНо чтобы забрать их, подпишись на наш канал 👇", reply_markup=kb)
         return
 
     await send_pdf(cb.message)
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
     await cb.answer()
 
 @dp.callback_query(F.data == "check_sub")
@@ -141,11 +126,8 @@ async def check_sub(cb: CallbackQuery):
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
         
-        # Если подписан — выдаем PDF
         await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
         await send_pdf(cb.message)
-        async with db_pool.acquire() as conn:
-            await conn.execute("UPDATE users SET pdf_sent=1 WHERE user_id=$1", cb.from_user.id)
     except Exception:
         await cb.answer("❌ Ты всё еще не подписан на канал!", show_alert=True)
     await cb.answer()
