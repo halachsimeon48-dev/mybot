@@ -93,7 +93,6 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(call=cb.data)
 
-    # ИСПОЛЬЗУЕМ ON CONFLICT DO NOTHING, ЧТОБЫ ИЗБЕЖАТЬ ОШИБКИ DUPLICATE KEY
     async with db_pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO users (user_id, username, age, rko, income, location, call_status, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (user_id) DO NOTHING",
@@ -106,18 +105,17 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    # ПОКАЗЫВАЕМ КНОПКИ ПОДПИСКИ
+    # ИСПРАВЛЕНО: Вместо edit_text используем answer (чтобы избежать ошибки "message is not modified")
     channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
         [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="give_pdf")]
     ])
-    await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nПодпишись на наш канал и забери файл 👇", reply_markup=kb)
+    await cb.message.answer("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nПодпишись на наш канал и забери файл 👇", reply_markup=kb)
     await cb.answer()
 
 @dp.callback_query(F.data == "give_pdf")
 async def give_pdf(cb: CallbackQuery):
-    # БЕЗ ПРОВЕРКИ ПОДПИСКИ - СРАЗУ ДАЕМ PDF
     await cb.message.edit_text("✅ Отлично! Забирай:")
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
