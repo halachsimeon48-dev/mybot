@@ -105,39 +105,27 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    await send_pdf_or_sub_check(cb)
+    # Показываем кнопки подписки
+    channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
+        [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="give_pdf")]
+    ])
+    await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nПодпишись на наш канал и забери файл 👇", reply_markup=kb)
     await cb.answer()
 
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(cb: CallbackQuery):
-    await send_pdf_or_sub_check(cb)
-    await cb.answer()
-
-async def send_pdf_or_sub_check(cb: CallbackQuery):
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
-        if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
-        
-        # Если подписан — выдаем PDF
-        await cb.message.edit_text("✅ Подписка подтверждена! Забирай:")
-        await send_pdf(cb.message)
-    except Exception:
-        # Если не подписан — даем кнопки
-        channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
-            [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
-        ])
-        await cb.message.edit_text("Спасибо за ответы! 🎁\n\nТвой гайд и доступ к офферам (до 15 000 ₽ за карту) уже готовы.\n\nНо чтобы забрать их, подпишись на наш канал 👇", reply_markup=kb)
-
-async def send_pdf(message: Message):
+# КНОПКА, КОТОРАЯ ВСЕГДА ДАЕТ PDF
+@dp.callback_query(F.data == "give_pdf")
+async def give_pdf(cb: CallbackQuery):
+    await cb.message.edit_text("✅ Отлично! Забирай:")
     text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
     
     if os.path.exists("guide.pdf"):
-        await message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
+        await cb.message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
 
 async def handle(request): return web.Response(text="OK")
 
