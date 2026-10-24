@@ -37,6 +37,10 @@ async def init_db():
     global db_pool
     db_pool = await asyncpg.create_pool(DATABASE_URL)
     async with db_pool.acquire() as conn:
+        # Добавляем колонку, если её нет
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS followup_sent INT DEFAULT 0;")
+        # Обновляем старые записи, где NULL, на 0
+        await conn.execute("UPDATE users SET followup_sent = 0 WHERE followup_sent IS NULL;")
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -82,24 +86,21 @@ async def start(msg: Message, state: FSMContext):
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", msg.from_user.id)
     
     if row:
-        # Если человек в базе, но PDF еще не получил (followup_sent=0)
+        # Если человек в базе, но еще не получил PDF (проверяем по followup_sent, который теперь всегда 0 или 1)
         if row['followup_sent'] == 0:
             data = {
                 "age": row['age'], "rko": row['rko_knowledge'], 
                 "income": row['desired_income'], "location": row['location']
             }
-            # Проверяем подписку
             try:
                 member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=msg.from_user.id)
                 if member.status in ['left', 'kicked']:
                     raise Exception("Not subscribed")
-                # Если подписан — даем PDF
                 await send_pdf(msg, data)
                 async with db_pool.acquire() as conn:
                     await conn.execute("UPDATE users SET followup_sent=1 WHERE user_id=$1", msg.from_user.id)
                 return
             except Exception:
-                # Если не подписан — просим подписаться
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="📢 Подписаться на канал", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}")],
                     [InlineKeyboardButton(text="✅ Я подписался, дай PDF", callback_data="check_sub")]
@@ -145,7 +146,7 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
     
     async with db_pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            "INSERT INTO users (user_id, username, age, rko_knowledge, desired_income, location, call_ready, joined_at, followup_sent) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0)",
             cb.from_user.id, cb.from_user.username, data.get("age"), data.get("rko"), 
             data.get("income"), data.get("location"), cb.data, datetime.now().isoformat()
         )
@@ -189,19 +190,18 @@ async def quiz_call(cb: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(cb: CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    if not data or "age" not in data:
-        # Если данных нет (например, состояние сброшено), берем из базы
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", cb.from_user.id)
-            if row:
-                data = {
-                    "age": row['age'], "rko": row['rko_knowledge'], 
-                    "income": row['desired_income'], "location": row['location']
-                }
-            else:
-                await cb.answer("❌ Ошибка: данные анкеты не найдены. Напиши /start", show_alert=True)
-                return
+    # Берем данные из базы, так как состояние (FSM) могло сброситься
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE user_id=$1", cb.from_user.id)
+    
+    if not row:
+        await cb.answer("❌ Ошибка: данные анкеты не найдены. Напиши /start", show_alert=True)
+        return
+
+    data = {
+        "age": row['age'], "rko": row['rko_knowledge'], 
+        "income": row['desired_income'], "location": row['location']
+    }
 
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
