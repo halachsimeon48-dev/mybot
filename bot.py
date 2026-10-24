@@ -16,6 +16,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 MANAGER_URL = os.getenv("MANAGER_URL", "https://t.me/kindbulat")
 DATABASE_URL = os.getenv("DATABASE_URL")
+CHANNEL_ID = "@semuabuz"
 
 logging.basicConfig(level=logging.INFO)
 db_pool = None
@@ -104,18 +105,25 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
-    # СРАЗУ ВЫДАЕМ PDF БЕЗ ПРОВЕРКИ ПОДПИСКИ
-    await send_pdf(cb.message)
-    await cb.answer()
-
-async def send_pdf(message: Message):
-    text = "✅ Ты прошел отбор!\n\nВот твой гайд по первым 100к. Забирай 👇\n\n💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\nХочешь получить доступ? Напиши мне слово «РКО» 👇\n" + MANAGER_URL
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]])
+    # СРАЗУ ВЫДАЕМ PDF И ДАЕМ КНОПКИ НА КАНАЛ И МЕНЕДЖЕРА
+    text = (
+        "✅ Ты прошел отбор!\n\n"
+        "Вот твой гайд по первым 100к. Забирай 👇\n\n"
+        "💸 А еще у меня есть офферы, где платят до 15 000 ₽ за оформление карты.\n\n"
+        f"Хочешь получить доступ? Напиши мне слово «РКО» 👇\n{MANAGER_URL}"
+    )
+    
+    channel_link = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=channel_link)],
+        [InlineKeyboardButton(text="Написать «РКО»", url=MANAGER_URL)]
+    ])
     
     if os.path.exists("guide.pdf"):
-        await message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
+        await cb.message.answer_document(FSInputFile("guide.pdf"), caption=text, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
 
 async def handle(request): return web.Response(text="OK")
 
