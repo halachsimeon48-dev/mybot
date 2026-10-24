@@ -105,6 +105,7 @@ async def q_call(cb: CallbackQuery, state: FSMContext):
         try: await bot.send_message(admin_id, admin_text)
         except: pass
 
+    # ПРОВЕРКА ПОДПИСКИ
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=cb.from_user.id)
         if member.status in ['left', 'kicked']: raise Exception("Not subscribed")
